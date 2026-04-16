@@ -11,7 +11,7 @@ One row per experiment. Keep this up to date as experiments complete.
 | E03 | Multi-head receiver (bits + channel MSE) | planned | — | — |
 | E04 | Statistical tightening (500 subframes/SNR) | folded into E01 | Re-eval of E01 best.pt at 500 subframes/SNR; headline corrected. See E01 errata. | [E01 results](02_experiments/E01_ofdm_supervised_rx/results.md) |
 | E05 | Impairment generalization (CFO, IQ imb, PA, alt-TDL) | planned | — | — |
-| E06 | Attention visualization + per-head role attribution | planned | — | — |
+| E06 | Interpretability probes on E01 (linear H-probe, pilot denoising, per-cell ablation, perturbation kernel) | scaffolded; probes not yet run | Hypotheses committed 2026-04-16 (R²≥0.95 at pilots by layer 2; model MSE 3–6 dB below LS; diagonal-attention ablation drives 25 dB BER back to ≥1.78e-3; freq kernel half-width ~6 SCs, flat in time). Attention-visualization + per-head attribution folded into Probe 3+4 outputs. | [hypothesis](02_experiments/E06_probes_on_e01/hypothesis.md) · [method](02_experiments/E06_probes_on_e01/method.md) |
 
 ## Phase 2 — Self-supervised pretraining (months 4–6)
 
