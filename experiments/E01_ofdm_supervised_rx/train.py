@@ -225,14 +225,39 @@ def main():
                         print(f"    !! HF upload failed (continuing): {e}")
 
     # Final save
+    final_path = os.path.join(args.out, "final.pt")
     torch.save({
         "model": model.state_dict(),
         "args": vars(args),
         "step": args.steps,
         "val_ber": best_val_ber,
         "history": history,
-    }, os.path.join(args.out, "final.pt"))
+    }, final_path)
     print(f"Done. best val BER {best_val_ber:.3e}. Saved to {args.out}/")
+
+    # Upload the final snapshot and training history too.
+    if hf_api is not None:
+        try:
+            hf_api.upload_file(
+                path_or_fileobj=final_path,
+                path_in_repo="final.pt",
+                repo_id=args.hf_repo,
+                repo_type="model",
+                commit_message=f"final snapshot at step {args.steps}",
+            )
+            history_path = os.path.join(args.out, "history.json")
+            with open(history_path, "w") as f:
+                json.dump(history, f, indent=2, default=str)
+            hf_api.upload_file(
+                path_or_fileobj=history_path,
+                path_in_repo="history.json",
+                repo_id=args.hf_repo,
+                repo_type="model",
+                commit_message="training history",
+            )
+            print(f"Uploaded final.pt + history.json to {args.hf_repo}")
+        except Exception as e:
+            print(f"!! HF upload of final.pt failed: {e}")
 
 
 if __name__ == "__main__":
