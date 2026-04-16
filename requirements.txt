@@ -1,0 +1,13 @@
+# Core dependencies shared across experiments.
+# Per-experiment extras go in experiments/EXX/requirements.txt.
+
+numpy>=1.24
+matplotlib>=3.7
+torch>=2.1
+scipy>=1.11
+
+# Experiment tracking (Phase 1 adoption, E02+)
+# wandb>=0.16
+
+# Slide generation (E00 artifacts)
+python-pptx>=0.6

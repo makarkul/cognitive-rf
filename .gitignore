@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# Model checkpoints — store externally (HF Hub or S3)
+*.pt
+*.pth
+*.ckpt
+checkpoints/
+!experiments/E00_sinusoid_recovery/ts_transformer.pth
+
+# Logs
+*.log
+wandb/
+runs/
+lightning_logs/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local outputs that aren't in notebook/*/figures/
+/tmp/
+/scratch/
+
+# Large IQ captures — never commit
+*.bin
+*.iq
+*.dat
+*.sigmf-data
+!**/test_data/*.bin
+
+# Claude worktree scaffolding
+.claude/
