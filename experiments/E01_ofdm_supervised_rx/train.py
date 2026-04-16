@@ -12,6 +12,7 @@ Usage (GPU run):
 """
 
 import argparse
+import json
 import math
 import os
 import time
@@ -24,6 +25,13 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from dataset import generate_batch, SNR_MIN_DB, SNR_MAX_DB
 from model import LearnedReceiver
+
+# Optional HF Hub auto-upload. Keeps training pod-termination-proof.
+try:
+    from huggingface_hub import HfApi, upload_file
+    HF_AVAILABLE = True
+except ImportError:
+    HF_AVAILABLE = False
 
 
 def cells_to_bit_targets(tx_bits, data_mask, grid_shape):
@@ -75,12 +83,33 @@ def main():
     p.add_argument("--n-heads", type=int, default=4)
     p.add_argument("--n-layers", type=int, default=4)
     p.add_argument("--d-ff", type=int, default=512)
+    p.add_argument("--hf-repo", type=str, default=None,
+                   help="If set, upload best.pt to this HF Hub repo on every "
+                        "improvement. Example: makarkul/cognitive-rf-E01")
     args = p.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
     val_rng = np.random.default_rng(args.seed + 777)
+
+    # Prepare HF Hub client if requested. Fail fast if misconfigured, so we
+    # don't discover the problem after 3 hours of training.
+    hf_api = None
+    if args.hf_repo:
+        if not HF_AVAILABLE:
+            raise RuntimeError("--hf-repo given but huggingface_hub is not "
+                               "installed. pip install huggingface_hub.")
+        hf_api = HfApi()
+        # Sanity check: confirm the repo exists and we can write to it.
+        try:
+            hf_api.repo_info(args.hf_repo, repo_type="model")
+            print(f"HF Hub auto-upload enabled: {args.hf_repo}")
+        except Exception as e:
+            raise RuntimeError(
+                f"Cannot access HF repo {args.hf_repo}. "
+                f"Did you run `huggingface-cli login`? "
+                f"Does the repo exist? Error: {e}")
 
     device = torch.device(args.device)
     model = LearnedReceiver(
@@ -153,13 +182,47 @@ def main():
             history.append({"step": step, "val_loss": val_loss, "val_ber": val_ber})
             if val_ber < best_val_ber:
                 best_val_ber = val_ber
+                ckpt_path = os.path.join(args.out, "best.pt")
                 torch.save({
                     "model": model.state_dict(),
                     "args": vars(args),
                     "step": step,
                     "val_ber": val_ber,
-                }, os.path.join(args.out, "best.pt"))
+                }, ckpt_path)
                 print(f"    -> saved best.pt  (BER {val_ber:.3e})")
+
+                # Auto-upload to HF Hub. If upload fails, we don't crash
+                # training; we just log it and keep going.
+                if hf_api is not None:
+                    try:
+                        hf_api.upload_file(
+                            path_or_fileobj=ckpt_path,
+                            path_in_repo="best.pt",
+                            repo_id=args.hf_repo,
+                            repo_type="model",
+                            commit_message=f"step {step}, val_ber {val_ber:.3e}",
+                        )
+                        # Also push a small JSON with the latest metrics so the
+                        # repo is self-describing without downloading the ckpt.
+                        meta = {
+                            "step": step,
+                            "val_ber": val_ber,
+                            "best_val_ber": best_val_ber,
+                            "args": vars(args),
+                        }
+                        meta_path = os.path.join(args.out, "training_status.json")
+                        with open(meta_path, "w") as f:
+                            json.dump(meta, f, indent=2, default=str)
+                        hf_api.upload_file(
+                            path_or_fileobj=meta_path,
+                            path_in_repo="training_status.json",
+                            repo_id=args.hf_repo,
+                            repo_type="model",
+                            commit_message=f"status @ step {step}",
+                        )
+                        print(f"    -> uploaded to HF: {args.hf_repo}")
+                    except Exception as e:
+                        print(f"    !! HF upload failed (continuing): {e}")
 
     # Final save
     torch.save({
