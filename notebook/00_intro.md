@@ -19,9 +19,9 @@ Three DSP-anchored hyperparameters drove the design:
 
 **OFDM recovery, step 4a (E01)** — scale the same idea from a 1-D sinusoid to a 14×300 LTE-5 resource grid. 834k params, 4 heads, 4 layers, `d_model = 128`, supervised on bit labels (BCE). Trained on EPA multipath + AWGN + CRS-style pilots, 30k steps, ~$1.50 on a RunPod 4090.
 
-Results: the learned receiver beats classical LS+interp everywhere ≥ 5 dB, tracks the perfect-CSI ZF oracle mid-range, and **exceeds the oracle at high SNR** (7.4×10⁻⁵ vs 2.4×10⁻³ at 25 dB, ~30×). See [E01 results](02_experiments/E01_ofdm_supervised_rx/results.md).
+Results (500-subframe eval, 4 M bits per SNR point): the learned receiver **matches the perfect-CSI ZF oracle within ±14% across 0–25 dB** and **beats EPA LS+interp by 1.4–4× across the full SNR range**. At high SNR it edges modestly below the oracle (1.23×10⁻³ vs 1.78×10⁻³ at 25 dB, a 1.45× reduction). An earlier 32-subframe eval had reported 30× below oracle at 25 dB; that was Poisson noise on ~19 error events — the corrected number is documented in the [E01 errata](02_experiments/E01_ofdm_supervised_rx/results.md).
 
-The oracle gap is the interesting piece. Perfect-CSI ZF floors out because it's a per-cell equalizer that amplifies noise on faded subcarriers. The transformer doesn't. It pools evidence across the joint time-frequency grid — frequency-domain smoothness, time-domain block-fading coherence, and the known pilot lattice — and does something MMSE-like plus soft-decoding-like in one shot. See [Discussion 002: ZF vs learned](01_discussions/002_zf_vs_learned.md).
+The oracle gap at high SNR is the interesting piece. Perfect-CSI ZF floors out because it's a per-cell equalizer that amplifies noise on faded subcarriers. The transformer doesn't. It pools evidence across the joint time-frequency grid — frequency-domain smoothness, time-domain block-fading coherence, and the known pilot lattice — and does something MMSE-like plus soft-decoding-like in one shot. The gap is a statistically significant but modest ~30–45% BER reduction at 20–25 dB, not the 30× originally reported. See [Discussion 002: ZF vs learned](01_discussions/002_zf_vs_learned.md).
 
 ## Where we're going
 

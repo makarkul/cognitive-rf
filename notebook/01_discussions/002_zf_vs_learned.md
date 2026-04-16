@@ -1,6 +1,8 @@
 # How does a learned receiver outperform perfect-CSI ZF?
 
-**Context:** In E01, the learned transformer beats the perfect-CSI ZF oracle at high SNR — BER 7.4e-5 vs 2.4e-3 at 25 dB. This looks surprising on first read ("the oracle has more information!"). The resolution is that "perfect-CSI ZF" is not the Bayes-optimal receiver for this channel. It's optimal only under narrow assumptions that don't hold.
+**Context:** In E01, the learned transformer edges below the perfect-CSI ZF oracle at high SNR — BER 1.23e-3 vs 1.78e-3 at 25 dB (a 1.45× reduction, under a 500-subframe eval). This looks surprising on first read ("the oracle has more information!"). The resolution is that "perfect-CSI ZF" is not the Bayes-optimal receiver for this channel. It's optimal only under narrow assumptions that don't hold.
+
+> **Note (2026-04-16 re-eval):** The original E01 RESULTS.md reported a 30× margin at 25 dB (7.4e-5 vs 2.4e-3). That was measured on 32 subframes per SNR — only ~19 error events at 25 dB — and was within Poisson noise. A tighter 500-subframe eval on the same checkpoint gives 1.45× as the real margin. The *direction* (learned < oracle at high SNR) is preserved and statistically significant; the *magnitude* was overstated.
 
 ## Why the oracle is beatable
 
@@ -8,7 +10,7 @@ Three reasons the learned RX gets past ZF:
 
 ### 1. ZF amplifies noise on faded subcarriers
 
-Per-SC ZF does `x̂[k] = y[k] / H[k]`. When `|H[k]|` is small (a deep fade), noise gets divided by a tiny number → that subcarrier contributes ~0.5 BER and dominates the average. This is the Rayleigh BER floor (~2.4e-3 for the oracle at 25 dB). MMSE (`H*/(|H|² + N₀)`) already beats ZF because it shrinks toward zero on faded bins instead of blowing up. The learned model can implement something MMSE-like — or better — for free.
+Per-SC ZF does `x̂[k] = y[k] / H[k]`. When `|H[k]|` is small (a deep fade), noise gets divided by a tiny number → that subcarrier contributes ~0.5 BER and dominates the average. This is the Rayleigh BER floor (~1.78e-3 for the oracle at 25 dB, measured on 4 M bits). MMSE (`H*/(|H|² + N₀)`) already beats ZF because it shrinks toward zero on faded bins instead of blowing up. The learned model can implement something MMSE-like — or better — for free.
 
 ### 2. ZF is per-cell. It throws away joint structure.
 
@@ -32,9 +34,9 @@ over all 4000 data bits simultaneously, conditioned on the QPSK alphabet. That i
 
 So the learned RX isn't breaking physics — it's closing the gap between ZF and ML-over-the-grid. That's exactly where the "beating the oracle" headroom lives.
 
-## Caveat
+## Caveat — resolved
 
-32 subframes/SNR is noisy. The 30× number at 25 dB should tighten on a longer run (scheduled as E04). But the *direction* — learned < oracle at high SNR — is robust and matches the deep-RX literature.
+The original 32-subframe eval suggested a 30× margin at 25 dB. E04 (the 500-subframe re-eval, folded back into E01) tightened that to 1.45×. The *direction* — learned < oracle at high SNR — is robust at high MC precision and matches the deep-RX literature. The magnitude is modest.
 
 ## Implications for later work
 

@@ -33,9 +33,11 @@ This is textbook OFDM and roughly what real LTE hardware does.
 | Learned vs LS+interp | What the learned RX gains over the practical baseline. |
 | Learned vs oracle | What the learned RX gains over *any* per-cell ZF, including an idealized one. |
 
-In E01:
-- Mid-SNR (15 dB): oracle 1.16e-2, LS+interp 2.15e-2, learned 1.13e-2. Learned ≈ oracle; both 2× better than LS+interp. The learned RX closed the estimator gap.
-- High-SNR (25 dB): oracle 2.4e-3, LS+interp 5.2e-3, learned 7.4e-5. Learned beats both. The oracle gap is real (discussed in [002](002_zf_vs_learned.md)).
+In E01 (500-subframe eval, 4 M bits per SNR):
+- Mid-SNR (15 dB): oracle 1.49e-2, LS+interp 2.67e-2, learned 1.60e-2. Learned ≈ oracle (within 7%); both ~1.7× better than LS+interp. The learned RX closed the estimator gap.
+- High-SNR (25 dB): oracle 1.78e-3, LS+interp 5.07e-3, learned 1.23e-3. Learned beats both — 1.45× below oracle, 4.1× below LS+interp. The oracle gap is modest but statistically real (discussed in [002](002_zf_vs_learned.md)).
+
+> The initial E01 report listed 7.4e-5 at 25 dB (a 30× margin). That was 32-subframe Poisson noise. The numbers above are the corrected 500-subframe values.
 
 ## What the learned RX is given as input
 

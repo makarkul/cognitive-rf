@@ -6,10 +6,10 @@ One row per experiment. Keep this up to date as experiments complete.
 
 | ID | Title | Status | Headline result | Link |
 |---|---|---|---|---|
-| E01 | OFDM supervised receiver (LTE-5, EPA, CRS pilots) | complete | Learned RX beats LS+interp at SNR ≥ 5 dB; beats perfect-CSI ZF oracle at ≥ 20 dB (30× at 25 dB) | [results](02_experiments/E01_ofdm_supervised_rx/results.md) |
+| E01 | OFDM supervised receiver (LTE-5, EPA, CRS pilots) | complete | Learned RX matches perfect-CSI ZF oracle within ±14% across 0–25 dB and beats LS+interp by 1.4–4× across the full range. At 25 dB: 1.23e-3 (learned) vs 1.78e-3 (oracle, 1.45×) vs 5.07e-3 (LS+interp, 4.1×). 500-subframe eval; original "30× below oracle" was Poisson noise on light sampling. | [results](02_experiments/E01_ofdm_supervised_rx/results.md) |
 | E02 | Depth/heads/LayerNorm ablation | planned | — | — |
 | E03 | Multi-head receiver (bits + channel MSE) | planned | — | — |
-| E04 | Statistical tightening (500 subframes/SNR) | planned | — | — |
+| E04 | Statistical tightening (500 subframes/SNR) | folded into E01 | Re-eval of E01 best.pt at 500 subframes/SNR; headline corrected. See E01 errata. | [E01 results](02_experiments/E01_ofdm_supervised_rx/results.md) |
 | E05 | Impairment generalization (CFO, IQ imb, PA, alt-TDL) | planned | — | — |
 | E06 | Attention visualization + per-head role attribution | planned | — | — |
 
