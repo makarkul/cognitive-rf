@@ -195,7 +195,104 @@ python retrain_lowsnr.py --amp-std 0.8 --phase-std 0.4 --epochs 10
 # Compare scalar-embedding vs FFT-embedding at matched param budget
 python compare_fft.py --amp-std 0.2 --phase-std 0.1 --epochs 8
 python compare_fft.py --amp-std 0.8 --phase-std 0.4 --epochs 10
+
+# Side experiment: LM-style next-noisy-sample target vs supervised denoiser
+python train_lm_vs_denoiser.py --epochs 25 --train-size 5000 --val-size 1000
 ```
 
 Numbers will vary slightly run-to-run because the validation set is generated
 on the fly.
+
+---
+
+## 7. LM-style vs denoiser side experiment
+
+### Why this exists
+
+The canonical training in `train.py` is a **supervised denoising
+autoregressor**: input is noisy, but the MSE target at every position is the
+*clean* next sample. That is not the same as the strict LLM-style setup,
+where the only label the model ever sees is the next observed sample (here,
+the next noisy sample). The phrase "next-sample prediction" can blur this
+distinction; the experiment in
+[`train_lm_vs_denoiser.py`](train_lm_vs_denoiser.py) makes it concrete.
+
+| Variant | Input | Target | Loss |
+|---|---|---|---|
+| Denoiser (canonical) | `noisy[0..N-1]` | `clean[1..N]`  | MSE-vs-clean |
+| LM-style              | `noisy[0..N-1]` | `noisy[1..N]`  | MSE-vs-noisy  |
+
+Both variants train the **same 29 K-param model from the same seed and the
+same data stream**; only the loss target differs. We then ask three
+diagnostic questions of each trained model:
+
+1. **Final denoising quality.** MSE of the model's output against the *clean*
+   next sample (even when MSE-vs-clean is not the training loss), and the
+   resulting SNR gain over a naive persistence baseline.
+2. **AR(2) attention signature.** Does the last-layer attention show peaks at
+   lag 1 and lag 2 — the AR(2) signature — under both variants?
+3. **Frequency probe.** Can a linear ridge regression on each layer's mean
+   hidden state predict the sinusoid's frequency? High R² says the model
+   represents `f` internally; the random-init control sits near 0.
+
+### Setup
+
+| Field | Value |
+|---|---|
+| Architecture | `TS_TRANSFORMER_CONFIG` (29 K params, ctx 128, emb 32, 2 heads, 2 layers) |
+| Optimizer | AdamW, lr 1e-3, weight_decay 0.01 |
+| Epochs | 25 |
+| Train / val | 5000 / 1000 random sinusoids per epoch (deterministic per index) |
+| Noise | `amp_noise_std = 0.2`, `phase_noise_std = 0.1` |
+| Seed | 42 (same init for both runs) |
+| Hardware | Laptop CPU |
+
+### Results
+
+#### 7a. Final denoising quality (MSE on the held-out validation set)
+
+| Variant | Val MSE-vs-clean | Val MSE-vs-noisy | SNR gain over naive (dB) |
+|---|---:|---:|---:|
+| Denoiser (target = clean) | _TBD_ | _TBD_ | _TBD_ |
+| LM-style (target = noisy) | _TBD_ | _TBD_ | _TBD_ |
+
+> Curves: [`lm_vs_denoiser/loss_curves.pdf`](lm_vs_denoiser/loss_curves.pdf).
+
+#### 7b. AR(2) attention signature
+
+Last-layer attention, averaged over heads, evaluated on a clean sinusoid at
+each test frequency. Peaks at lag 1 and lag 2 are the AR(2) signature.
+
+> Figure: [`lm_vs_denoiser/attention_lag_profile.pdf`](lm_vs_denoiser/attention_lag_profile.pdf).
+> Per-frequency commentary filled in after the run completes.
+
+#### 7c. Linear frequency probe
+
+Ridge probe (closed-form, `λ = 1e-4`) on layer-wise mean-pooled hidden states,
+trained on 1500 random sinusoids and evaluated on 400 held-out ones.
+
+| Layer | Denoiser R² | LM R² | Random-init R² (from `probes.py`) |
+|---|---:|---:|---:|
+| layer_1 | _TBD_ | _TBD_ | reference run, ≈ 0 |
+| layer_2 | _TBD_ | _TBD_ | reference run, ≈ 0 |
+
+> Figure: [`lm_vs_denoiser/freq_probe.pdf`](lm_vs_denoiser/freq_probe.pdf).
+
+### Interpretation (filled in after the run)
+
+_TBD — the comparison answers: does the AR(2) signature in attention emerge
+from the **structure of the input stream alone** (LM-style would still show
+it), or only when the model is **explicitly supervised against a clean
+reference** (denoiser only)? And: how much absolute denoising quality is
+sacrificed when the clean reference is removed?_
+
+### Caveats
+
+- Both variants are trained on the *same* synthetic distribution, so
+  conclusions are about training-loss shape, not data distribution.
+- The LM-style target's irreducible loss floor is the noise variance, not
+  zero — its `MSE-vs-noisy` cannot drop below ≈ noise power. We therefore
+  read the LM model's denoising quality from `MSE-vs-clean`, evaluated
+  post-training, which it never optimised for directly.
+- Random-init R² is taken from the canonical `probes.py` random-init
+  control, not recomputed here.

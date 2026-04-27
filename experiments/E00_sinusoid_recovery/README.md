@@ -39,6 +39,41 @@ i.e., it is an **AR(2)** process. So in principle, only 2 past samples are neede
 
 **Thesis:** A transformer doing next-sample prediction on a sequence of noisy samples should *implicitly* learn this AR structure. Self-attention acts as a data-dependent filter, and the learned attention weights over past positions should correspond to AR coefficients.
 
+### Framing — this is a denoising autoregressor, not LM-style self-supervision
+
+It is worth being precise about what the model sees during training, because the
+phrase "next-sample prediction" can suggest a stricter setup than the one used
+here.
+
+| Variant | Input at position `t` | Target at position `t` | Interpretation |
+|---|---|---|---|
+| **This experiment (denoiser)** | `noisy[0..t]` | **`clean[t+1]`** | Noisy in, *clean reference* used for the MSE label. The model is supervised against a clean signal it never sees as input. |
+| True LM-style next-sample | `noisy[0..t]` | `noisy[t+1]` | Noisy in, *next noisy observation* as the only label. No clean reference anywhere — the model has to model the observed stream itself. |
+
+What this means:
+
+- The current setup is best described as a **supervised denoising
+  autoregressor**: a regression model trained against ground-truth clean
+  samples it does not get to observe at inference. It is not pure
+  self-supervised next-token prediction in the LLM sense.
+- This is the standard supervised setup for any signal-recovery problem
+  (Wiener, Kalman, MMSE estimators, modern neural denoisers all share this
+  shape). Clean references are required at training time only.
+- The classical-DSP comparison (AR(2) Yule-Walker on the noisy stream alone,
+  no clean reference) is therefore not a like-for-like baseline. The
+  transformer here gets a stronger training signal than Yule-Walker does.
+  The "transformer matches AR(2)" claim is a statement about the *learned
+  internal structure*, not about training-data parity.
+- The truly LM-equivalent variant (`target = noisy[t+1]`) is implemented as
+  a side experiment in `train_lm_vs_denoiser.py`; results comparing the
+  attention lag profile and frequency-probe R² between the two variants
+  are in [`RESULTS.md` §7](RESULTS.md#7-lm-style-vs-denoiser-side-experiment).
+- The full self-supervised analogue at the program scale is **E07
+  (masked-RE pretraining on resource grids)**: the model predicts masked
+  observations from unmasked observations only, with no separate clean
+  labels — that is the cognitive-RF program's real "no clean reference"
+  setting.
+
 ## Architecture overview
 
 ```
@@ -232,7 +267,12 @@ Each training example is generated **on the fly**. For every `__getitem__` call:
    - `input_seq  = noisy[0 .. N-1]`   (context)
    - `target_seq = clean[1 .. N]`     (next clean sample at every position)
 
-This shift-by-one, parallel target-at-every-position setup mirrors standard GPT training: at position `t` the model must predict the clean signal value at time `t+1` given noisy history `[0..t]`.
+This shift-by-one, parallel target-at-every-position setup mirrors the
+*shape* of standard GPT training, but the **targets are clean samples,
+not next observations**. The model is therefore a supervised denoising
+autoregressor (see [Framing — denoising autoregressor vs LM-style](#framing--this-is-a-denoising-autoregressor-not-lm-style-self-supervision)
+for the full distinction and [`RESULTS.md` §7](RESULTS.md#7-lm-style-vs-denoiser-side-experiment)
+for the head-to-head comparison with a true LM-style variant).
 
 Randomising frequency every batch forces the model to learn a **generic AR predictor**, not memorise one specific sinusoid.
 
