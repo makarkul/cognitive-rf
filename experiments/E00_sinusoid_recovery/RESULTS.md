@@ -249,50 +249,136 @@ diagnostic questions of each trained model:
 
 ### Results
 
-#### 7a. Final denoising quality (MSE on the held-out validation set)
+#### 7a. Final denoising quality (held-out 1000-sample validation set)
 
-| Variant | Val MSE-vs-clean | Val MSE-vs-noisy | SNR gain over naive (dB) |
-|---|---:|---:|---:|
-| Denoiser (target = clean) | _TBD_ | _TBD_ | _TBD_ |
-| LM-style (target = noisy) | _TBD_ | _TBD_ | _TBD_ |
+| Variant | Val MSE-vs-clean | Val MSE-vs-noisy | SNR_in (dB) | SNR_out (dB) | SNR gain (dB) |
+|---|---:|---:|---:|---:|---:|
+| Denoiser (target = clean) | 0.0437 | 0.0722 | 2.81 | 13.11 | **+10.30** |
+| LM-style (target = noisy) | **0.0411** | **0.0696** | 2.81 | **13.37** | **+10.56** |
 
-> Curves: [`lm_vs_denoiser/loss_curves.pdf`](lm_vs_denoiser/loss_curves.pdf).
+The two variants converge to **essentially the same denoising quality**.
+The LM-style model is in fact ~0.3 dB *better* on the held-out set in this
+run — a difference that is within run-to-run variation given a single seed
+and a single 1000-sample validation set, but the headline is that the LM
+target loses **nothing** observable here.
 
-#### 7b. AR(2) attention signature
+> Per-epoch curves: [`lm_vs_denoiser/loss_curves.pdf`](lm_vs_denoiser/loss_curves.pdf).
+> Both curves track within ≤0.3 dB of each other across all 25 epochs.
+
+#### 7b. Attention lag profile
 
 Last-layer attention, averaged over heads, evaluated on a clean sinusoid at
-each test frequency. Peaks at lag 1 and lag 2 are the AR(2) signature.
+each of `f ∈ {3, 5, 10, 15} Hz`. The hypothesis going in was a "lag 1 + lag
+2" AR(2) bar.
+
+What the trained models actually show is more interesting: **the
+attention weight peaks at integer multiples of the input period**
+(`T = fs / f`), within the lags reachable inside the truncated 0–20 lag
+window:
+
+| Test freq | Period `T` (samples) | Visible peaks (lags) | Comment |
+|---|---:|---|---|
+| 3 Hz  | ≈ 33 | profile is nearly flat across 0–20 | first period sits beyond the displayed window |
+| 5 Hz  | ≈ 20 | broad bump centered at 5–7 | first sub-period region |
+| 10 Hz | ≈ 10 | sharp peak at 2–3, second cluster at 12–14 | one full period back |
+| 15 Hz | ≈ 6.7 | sharp peaks at 2, 8, 14 | one, two, three periods back |
+
+This is **period-aligned attention**, not a strict AR(2) "lag 1 + lag 2"
+bar. The strict AR(2) recurrence `x[n] = 2cos(ω₀)·x[n-1] - x[n-2]` does
+*not* require the model to attend at the period boundary — but apparently
+the trained model does both: it learns a representation in which one
+period back is a useful corroborating reference. With ~128-sample context
+and frequencies in [1, 20] Hz, multiple periods always fit inside the
+window, so attending to them is "free" capacity that gradient descent
+fills.
+
+The crucial point for the framing question is that **the denoiser and the
+LM-style model produce visually indistinguishable lag profiles** at every
+test frequency — same peak locations, same peak magnitudes, same
+inter-peak structure. The pattern is being pulled out of the *input
+dynamics*, not out of the supervisory signal.
 
 > Figure: [`lm_vs_denoiser/attention_lag_profile.pdf`](lm_vs_denoiser/attention_lag_profile.pdf).
-> Per-frequency commentary filled in after the run completes.
 
 #### 7c. Linear frequency probe
 
-Ridge probe (closed-form, `λ = 1e-4`) on layer-wise mean-pooled hidden states,
-trained on 1500 random sinusoids and evaluated on 400 held-out ones.
+Ridge probe (closed-form, `λ = 1e-4`) on layer-wise mean-pooled hidden
+states, trained on 1500 random sinusoids and evaluated on 400 held-out ones.
+Higher R² = the layer's hidden state more linearly predicts the input
+sinusoid's frequency.
 
-| Layer | Denoiser R² | LM R² | Random-init R² (from `probes.py`) |
-|---|---:|---:|---:|
-| layer_1 | _TBD_ | _TBD_ | reference run, ≈ 0 |
-| layer_2 | _TBD_ | _TBD_ | reference run, ≈ 0 |
+| Layer | Denoiser R² | LM R² | RMSE denoiser (Hz) | RMSE LM (Hz) |
+|---|---:|---:|---:|---:|
+| layer_1 | 0.930 | 0.932 | 1.45 | 1.42 |
+| layer_2 | 0.976 | 0.970 | 0.84 | 0.95 |
+
+For reference, the canonical random-init control in `probes.py` reports
+`R² ≈ 0` at every layer — so any reading well above 0 is structure created
+by training. Both variants reach R² ≈ 0.97 at layer 2, with the denoiser
+~0.005 higher.
 
 > Figure: [`lm_vs_denoiser/freq_probe.pdf`](lm_vs_denoiser/freq_probe.pdf).
 
-### Interpretation (filled in after the run)
+### Interpretation
 
-_TBD — the comparison answers: does the AR(2) signature in attention emerge
-from the **structure of the input stream alone** (LM-style would still show
-it), or only when the model is **explicitly supervised against a clean
-reference** (denoiser only)? And: how much absolute denoising quality is
-sacrificed when the clean reference is removed?_
+The LM-style and denoiser variants are observationally **the same model**:
+matched SNR gain to within 0.3 dB, matched frequency-probe R² to within
+0.006, and visually matched attention lag profiles. The "transformer
+discovers AR(2)" claim therefore does not depend on access to clean
+references during training.
+
+There is a clean reason this was foreseeable. With i.i.d. noise added to a
+sinusoid, the optimal predictor of the *next noisy sample* given the noisy
+history is
+
+```
+E[noisy[t+1] | noisy[0..t]] = E[clean[t+1] | noisy[0..t]] + E[ε[t+1] | noisy[0..t]]
+                            = E[clean[t+1] | noisy[0..t]] + 0
+                            = the optimal denoiser
+```
+
+i.e. the Bayes-optimal LM-style predictor *is* the optimal denoiser. The
+two losses share the same minimiser; they differ only in their irreducible
+loss floor (the LM-style target sits ≈ noise-variance higher, which is
+exactly what the `MSE-vs-noisy` columns show — both variants land near
+0.07, the noise floor under our `amp_std=0.2, phase_std=0.1` setting).
+Gradient descent therefore finds essentially the same fixed point under
+both objectives.
+
+Practical consequence for the cognitive-RF program: **for any signal
+recovery task where the noise is approximately independent of the signal
+and zero-mean, the strict LM-style objective (predict the next observation)
+is a near-free substitute for supervised denoising.** It does not require
+clean references, which makes it a candidate self-supervised pretraining
+loss at the resource-grid scale (E07 territory). The supervised-denoiser
+shortcut used in E00 was an honest bookkeeping convenience, not a load-
+bearing assumption — the AR(2) story survives the cleaner framing.
+
+The flip side is that this is a **best-case demonstration**: a stationary
+zero-mean noise model and a single-tone signal. Real RF impairments
+(coloured noise, phase noise, hardware DC offsets, multipath) will not
+cleanly satisfy the `E[ε|history] = 0` condition, and a strict LM-style
+loss may then leave a non-trivial bias on the table that supervised
+training would not. Quantifying that gap on resource grids is the right
+empirical question to carry into E07.
 
 ### Caveats
 
+- Single seed (42), single run. The 0.3 dB delta is within plausible
+  run-to-run variation; the conclusion is "LM and denoiser are
+  indistinguishable on this task," not "LM is strictly better."
 - Both variants are trained on the *same* synthetic distribution, so
   conclusions are about training-loss shape, not data distribution.
 - The LM-style target's irreducible loss floor is the noise variance, not
-  zero — its `MSE-vs-noisy` cannot drop below ≈ noise power. We therefore
-  read the LM model's denoising quality from `MSE-vs-clean`, evaluated
-  post-training, which it never optimised for directly.
-- Random-init R² is taken from the canonical `probes.py` random-init
-  control, not recomputed here.
+  zero — `MSE-vs-noisy` cannot drop below ≈ noise power. We read the LM
+  model's denoising quality from `MSE-vs-clean`, evaluated post-training,
+  which it never optimised for directly. This is a fair readout because
+  the LM and denoiser optima coincide (see Interpretation).
+- The frequency-probe random-init R² (≈ 0) is referenced from the
+  canonical `probes.py` control rather than re-collected here; the same
+  architecture, the same input distribution, and an untrained model
+  produce a near-zero R² there, and there is no reason to expect a
+  different number on this sweep.
+- Outcome is contingent on noise being i.i.d. and zero-mean (the
+  `E[ε|history] = 0` argument). Conclusions do not transfer mechanically
+  to coloured / signal-correlated noise.

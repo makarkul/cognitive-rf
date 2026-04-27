@@ -1,0 +1,56 @@
+{
+  "config": {
+    "context_length": 128,
+    "emb_dim": 32,
+    "n_heads": 2,
+    "n_layers": 2,
+    "drop_rate": 0.05,
+    "qkv_bias": false
+  },
+  "args": {
+    "epochs": 25,
+    "batch_size": 32,
+    "lr": 0.001,
+    "train_size": 5000,
+    "val_size": 1000,
+    "seed": 42,
+    "amp_noise": 0.2,
+    "phase_noise": 0.1,
+    "out_dir": "lm_vs_denoiser",
+    "device": "cpu"
+  },
+  "denoiser_final": {
+    "mse_clean": 0.04366416227817536,
+    "mse_noisy": 0.07221062672138213,
+    "snr_in_db": 2.812591679947112,
+    "snr_out_db": 13.111392398218777,
+    "snr_gain_db": 10.298800718271666
+  },
+  "lm_final": {
+    "mse_clean": 0.041109889477491376,
+    "mse_noisy": 0.06958008110523224,
+    "snr_in_db": 2.812591679947112,
+    "snr_out_db": 13.373180630129823,
+    "snr_gain_db": 10.560588950182712
+  },
+  "denoiser_freq_probe": {
+    "layer_1": {
+      "r2_test": 0.929576488372985,
+      "rmse_test": 1.4452826976776123
+    },
+    "layer_2": {
+      "r2_test": 0.9763441125288352,
+      "rmse_test": 0.8376519083976746
+    }
+  },
+  "lm_freq_probe": {
+    "layer_1": {
+      "r2_test": 0.932039962117689,
+      "rmse_test": 1.4197791814804077
+    },
+    "layer_2": {
+      "r2_test": 0.9698719174528772,
+      "rmse_test": 0.9453219175338745
+    }
+  }
+}
