@@ -56,18 +56,20 @@ each. Headline scalars from
 
 | Noise mode | What it tests | Δ MSE-clean (LM − den) | Δ SNR gain (LM − den, dB) | Drift RMSE |
 |---|---|---:|---:|---:|
-| `iid` | i.i.d. amp + phase noise (the AWGN-equivalent case) | _filled in §7 of E00 RESULTS_ | _ditto_ | _ditto_ |
-| `ar1_coloured` | AR(1) coloured amp noise (`α = 0.9`) | _filled in_ | _filled in_ | _filled in_ |
-| `wiener_phase` | Integrated phase walk (oscillator-style drift) | _filled in_ | _filled in_ | _filled in_ |
-| `dc_offset` | Per-sequence DC bias (hardware-style) | _filled in_ | _filled in_ | _filled in_ |
+| `iid` | i.i.d. amp + phase noise (the AWGN-equivalent case) | −0.003 | **+0.26** | 0.063 |
+| `ar1_coloured` (α=0.9) | AR(1) coloured amp noise | +0.001 | **−0.12** | 0.090 |
+| `wiener_phase` | Integrated phase walk (oscillator-style drift) | +0.072 | **−0.70** | 0.318 |
+| `dc_offset` (σ_μ=0.5) | Per-sequence DC bias (hardware-style) | +0.240 | **−6.91** | 0.483 |
 
-Numbers land in
-[`experiments/E00_sinusoid_recovery/RESULTS.md` §7](../../experiments/E00_sinusoid_recovery/RESULTS.md#7-lm-style-vs-denoiser-side-experiment).
+Full per-mode tables (with absolute MSE values, freq-probe R², etc.) live
+at [`experiments/E00_sinusoid_recovery/RESULTS.md` §7](../../experiments/E00_sinusoid_recovery/RESULTS.md#7-lm-style-vs-denoiser-side-experiment).
 
-The qualitative claim survives smoke-testing already: the `dc_offset` mode
-shows a drift RMSE roughly 40× larger than `iid`. The LM model absorbs the
-predictable per-sequence bias; the denoiser does not. Same pattern at
-smaller magnitude for `wiener_phase` and `ar1_coloured`.
+The drift-RMSE hierarchy matches the prediction exactly:
+`iid < ar1 < wiener_phase < dc_offset`. The most striking single
+number is `dc_offset` Δ SNR-gain = **−6.91 dB**: when the noise has a
+deterministic component the LM model can predict, the LM's
+Bayes-optimal output is biased by exactly that component, and there
+is no way for further training to fix it without changing the loss.
 
 ## Why this matters for the cognitive-RF program
 

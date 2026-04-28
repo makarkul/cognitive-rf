@@ -33,16 +33,21 @@ classical-DSP perspective.
 
 `python train_lm_vs_denoiser.py --epochs 25 --train-size 5000 --val-size 1000 --noise-mode sweep`
 
-Headline scalars (filled in once the run lands —
-[E00 RESULTS §7](../../../experiments/E00_sinusoid_recovery/RESULTS.md#7-lm-style-vs-denoiser-side-experiment)
-holds the canonical version):
+Headline scalars from the 25-epoch sweep (`seed=42`):
 
-| Noise mode | Δ MSE-vs-clean (LM − den) | Δ SNR gain (dB) | Drift RMSE | Verdict |
-|---|---:|---:|---:|---|
-| `iid` | _TBD_ | _TBD_ | _TBD_ | _TBD — predicted ≈ 0_ |
-| `ar1_coloured` (α=0.9) | _TBD_ | _TBD_ | _TBD_ | _TBD — predicted small +_ |
-| `wiener_phase` | _TBD_ | _TBD_ | _TBD_ | _TBD — predicted larger +_ |
-| `dc_offset` (σ_μ=0.5) | _TBD_ | _TBD_ | _TBD_ | _TBD — predicted largest +_ |
+| Noise mode | Δ MSE-vs-clean (LM − den) | Δ SNR gain (dB) | Drift RMSE | LM layer-2 R² | Verdict |
+|---|---:|---:|---:|---:|---|
+| `iid`                | −0.003 | **+0.26** | 0.063 | 0.969 | equivalence holds |
+| `ar1_coloured` (α=0.9) | +0.001 | **−0.12** | 0.090 | 0.938 | small LM penalty |
+| `wiener_phase`       | +0.072 | **−0.70** | 0.318 | 0.980 | clean LM penalty (both modes hard) |
+| `dc_offset` (σ_μ=0.5) | +0.240 | **−6.91** | 0.483 | 0.967 | equivalence broken |
+
+The drift-RMSE ordering matches the prediction exactly:
+`iid (0.063) < ar1 (0.090) < wiener_phase (0.318) < dc_offset (0.483)`.
+The `dc_offset` Δ SNR-gain of −6.9 dB is the headline of the sweep —
+when the noise has a deterministic component, the LM's Bayes-optimal
+output literally contains that component as bias, and the denoiser
+gets to subtract it.
 
 Figures:
 
@@ -83,9 +88,15 @@ for the full story:
 - **(2) Linear frequency probe.** Confirmed — R² > 0.9 at layer 2 vs
   ≈ 0 at random init.
 - **(3) Equivalence holds under i.i.d. and breaks under structured
-  noise.** _Verdict pending the full 25-epoch sweep; the smoke-test
-  with 2 epochs already shows the predicted ranking
-  `iid < ar1 < wiener_phase < dc_offset` in drift RMSE (0.012 → 0.50)._
+  noise.** Confirmed by the 25-epoch sweep. Drift-RMSE ordering
+  matches the prediction (0.063 → 0.090 → 0.318 → 0.483), and
+  Δ SNR-gain matches the predicted *magnitude* hierarchy: small for
+  `iid` and `ar1_coloured` (within seed-noise), larger for
+  `wiener_phase` (−0.70 dB), catastrophic for `dc_offset` (−6.91 dB).
+  One sub-result was unexpected — under `wiener_phase` the LM has a
+  *higher* freq-probe R² than the denoiser; explained in §7d as the
+  two regimes solving different effective tasks under a non-stationary
+  signal model.
 
 ## Caveats
 

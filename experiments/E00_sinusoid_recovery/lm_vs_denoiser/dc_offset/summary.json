@@ -1,0 +1,70 @@
+{
+  "mode": "dc_offset",
+  "config": {
+    "context_length": 128,
+    "emb_dim": 32,
+    "n_heads": 2,
+    "n_layers": 2,
+    "drop_rate": 0.05,
+    "qkv_bias": false
+  },
+  "ds_params": {
+    "amp_noise_std": 0.2,
+    "phase_noise_std": 0.1,
+    "noise_mode": "dc_offset",
+    "alpha_ar1": 0.9,
+    "dc_offset_std": 0.5
+  },
+  "args": {
+    "epochs": 25,
+    "batch_size": 32,
+    "lr": 0.001,
+    "train_size": 5000,
+    "val_size": 1000,
+    "seed": 42,
+    "amp_noise": 0.2,
+    "phase_noise": 0.1,
+    "alpha_ar1": 0.9,
+    "dc_offset_std": 0.5,
+    "out_dir": "lm_vs_denoiser",
+    "device": "cpu"
+  },
+  "denoiser_final": {
+    "mse_clean": 0.061474317759275435,
+    "mse_noisy": 0.29333821702003476,
+    "snr_in_db": 0.9431042079462226,
+    "snr_out_db": 11.62570654563088,
+    "snr_gain_db": 10.682602337684658
+  },
+  "lm_final": {
+    "mse_clean": 0.30177857613563536,
+    "mse_noisy": 0.08304479664564132,
+    "snr_in_db": 0.9431042079462226,
+    "snr_out_db": 4.715759671087839,
+    "snr_gain_db": 3.772655463141616
+  },
+  "delta_mse_clean": 0.24030425837635994,
+  "delta_snr_gain_db": -6.909946874543042,
+  "drift_rmse": 0.48326999765907025,
+  "drift_bias": 0.002926060553640127,
+  "denoiser_freq_probe": {
+    "layer_1": {
+      "r2_test": 0.9049682341380992,
+      "rmse_test": 1.6789137125015259
+    },
+    "layer_2": {
+      "r2_test": 0.944774657496136,
+      "rmse_test": 1.2798620462417603
+    }
+  },
+  "lm_freq_probe": {
+    "layer_1": {
+      "r2_test": 0.9264618403869356,
+      "rmse_test": 1.4768974781036377
+    },
+    "layer_2": {
+      "r2_test": 0.9670954422865166,
+      "rmse_test": 0.9879205226898193
+    }
+  }
+}

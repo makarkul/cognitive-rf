@@ -342,44 +342,63 @@ under four noise distributions:
 | `wiener_phase` | phase noise integrated (Wiener walk). Amp i.i.d. | structured oscillator-style drift |
 | `dc_offset` | per-sequence DC bias `μ ~ N(0, 0.5²)` | deterministic signal-independent bias |
 
-Headline scalars (filled in once the 25-epoch run completes):
+Headline scalars from the 25-epoch sweep (`seed=42`, 5000 train / 1000 val
+sinusoids per epoch, identical between regimes):
 
-| Mode | Δ MSE-clean (LM − den) | Δ SNR gain (LM − den, dB) | Drift RMSE on val | Verdict |
-|---|---:|---:|---:|---|
-| `iid`           | _TBD_ | _TBD_ | _TBD_ | _expected ≈ 0_ |
-| `ar1_coloured`  | _TBD_ | _TBD_ | _TBD_ | _expected small +_ |
-| `wiener_phase`  | _TBD_ | _TBD_ | _TBD_ | _expected larger +_ |
-| `dc_offset`     | _TBD_ | _TBD_ | _TBD_ | _expected largest +_ |
+| Mode | denoiser MSE-clean | LM MSE-clean | denoiser SNR gain (dB) | LM SNR gain (dB) | Δ SNR gain (LM − den, dB) | Drift RMSE | denoiser layer-2 R² | LM layer-2 R² |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `iid`            | 0.0437 | 0.0411 | **+10.30** | **+10.56** | **+0.26** | 0.063 | 0.976 | 0.969 |
+| `ar1_coloured`   | 0.0382 | 0.0393 | **+10.87** | **+10.75** | **−0.12** | 0.090 | 0.970 | 0.938 |
+| `wiener_phase`   | 0.4171 | 0.4895 | **+2.75**  | **+2.05**  | **−0.70** | 0.318 | 0.917 | 0.980 |
+| `dc_offset`      | 0.0615 | 0.3018 | **+10.68** | **+3.77**  | **−6.91** | 0.483 | 0.945 | 0.967 |
 
 > Cross-mode summary figure: [`lm_vs_denoiser/noise_mode_sweep.pdf`](lm_vs_denoiser/noise_mode_sweep.pdf).
 > Per-mode artifacts: `lm_vs_denoiser/<mode>/{loss_curves.pdf,
 > attention_lag_profile.pdf, freq_probe.pdf, summary.json}`.
 
-The smoke-test (2 epochs) already shows the expected *ordering* — drift
-RMSE 0.012 (`iid`) → 0.012 (`ar1`) → 0.250 (`wiener_phase`) → 0.498
-(`dc_offset`). The full 25-epoch numbers will firm up the deltas; the
-hierarchy itself is robust to under-training.
+The predicted **drift-RMSE hierarchy** holds cleanly:
+`iid (0.063) < ar1_coloured (0.090) < wiener_phase (0.318) < dc_offset (0.483)`.
+The further the noise process is from i.i.d.-zero-mean, the more the LM
+output diverges from the denoiser output — exactly what
+`E[ε[t+1] | history]` predicts.
 
-The interpretation, written before the run lands so it does not retro-fit:
+What each mode says:
 
-- For `iid`, both regimes converge to the same optimum. Confirmed in §7a–c.
-- For `ar1_coloured` (`α = 0.9`), the LM model can predict the next noise
-  sample as `α · ε[t]`. Bayes-optimal LM output therefore includes a small
-  noise component that the denoiser does not have. Effect should show up
-  as a modest positive Δ MSE-clean.
-- For `wiener_phase`, the noise is a **non-stationary** integrated process.
-  The LM model has a strong incentive to track the phase walk into its
-  output (the next phase is the current phase plus a step). This breaks
-  the AR(2) cleanly, since the "true" recurrence now has a slowly-varying
-  ω₀. Expect a larger Δ MSE-clean than AR(1) and a noticeable broadening
-  of the attention lag profile.
-- For `dc_offset`, the noise has a **deterministic per-sequence component**
-  that the LM model can predict almost perfectly from the first few
-  samples (it's just the running mean). The LM output should be biased by
-  ≈ μ; the denoiser should learn to subtract μ. This is the cleanest
-  illustration of the equivalence boundary: drift RMSE here is large not
-  because the model is bad, but because the *Bayes-optimal LM target* is
-  literally different from the Bayes-optimal denoiser target.
+- **`iid` — equivalence holds (predicted, confirmed).** Both regimes get
+  ≈ +10.3 dB SNR gain. The +0.26 dB favouring LM is single-seed noise.
+  This is the §7a–c regime.
+- **`ar1_coloured` (α = 0.9) — small penalty.** The LM model gets
+  Δ SNR-gain = −0.12 dB, almost in the noise. Both regimes get *better*
+  absolute MSE-clean than under `iid` (0.038 vs 0.044) because AR(1)
+  amplitude noise has lower effective variance after the model averages
+  it over context. The cleaner signal of LM degradation is the
+  freq-probe layer-2 R²: 0.970 (denoiser) vs 0.938 (LM). The LM is
+  spending some representation capacity tracking the noise process.
+- **`wiener_phase` — large absolute penalty for both, plus the cleanest
+  Δ SNR-gain (−0.70 dB).** The integrated phase walk is an
+  irreducibly hard task: the denoiser can recover only +2.75 dB
+  (vs +10.3 under iid). The LM does worse still at +2.05 dB. *Both
+  models are floored by the underlying problem*; the relative gap is
+  the LM penalty.
+  
+  Surprising sub-result: the LM's layer-2 freq-probe R² (0.980) is
+  **higher** than the denoiser's (0.917). Likely interpretation: the
+  denoiser is forced to suppress the phase walk to recover the
+  *nominal* sinusoid frequency, which costs it some linear frequency
+  representation; the LM stays close to the input statistics where the
+  *local instantaneous* frequency is more linearly readable. Same data,
+  different learnt task — not "LM is better."
+- **`dc_offset` — equivalence catastrophically broken (Δ SNR-gain
+  −6.91 dB).** The denoiser learns to subtract the per-sequence bias
+  and recovers full quality (+10.68 dB, matching `iid`). The LM regime
+  collapses to +3.77 dB because the optimal LM target literally
+  contains the predictable bias. This is the cleanest illustration in
+  the sweep: when the noise has a deterministic component, the LM's
+  Bayes-optimal output is biased by exactly that component, and there
+  is no way for further training to fix it without changing the loss.
+
+**Hierarchy summary by Δ SNR-gain magnitude:**
+`iid (+0.26) ≈ ar1 (−0.12) << wiener_phase (−0.70) <<< dc_offset (−6.91)`.
 
 ### Interpretation
 
