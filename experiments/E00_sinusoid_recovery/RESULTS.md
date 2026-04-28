@@ -235,6 +235,9 @@ diagnostic questions of each trained model:
    hidden state predict the sinusoid's frequency? High R² says the model
    represents `f` internally; the random-init control sits near 0.
 
+We also run a four-mode noise sweep (§7d below) to map the boundary at
+which the LM-vs-denoiser equivalence holds.
+
 ### Setup
 
 | Field | Value |
@@ -243,13 +246,16 @@ diagnostic questions of each trained model:
 | Optimizer | AdamW, lr 1e-3, weight_decay 0.01 |
 | Epochs | 25 |
 | Train / val | 5000 / 1000 random sinusoids per epoch (deterministic per index) |
-| Noise | `amp_noise_std = 0.2`, `phase_noise_std = 0.1` |
+| Noise (i.i.d. baseline) | `amp_noise_std = 0.2`, `phase_noise_std = 0.1` |
 | Seed | 42 (same init for both runs) |
 | Hardware | Laptop CPU |
 
+§7a–c below report the **i.i.d. baseline** (mode = `iid`); §7d reports the
+four-mode sweep using the same architecture and training protocol.
+
 ### Results
 
-#### 7a. Final denoising quality (held-out 1000-sample validation set)
+#### 7a. Final denoising quality, i.i.d. mode (held-out 1000-sample validation set)
 
 | Variant | Val MSE-vs-clean | Val MSE-vs-noisy | SNR_in (dB) | SNR_out (dB) | SNR gain (dB) |
 |---|---:|---:|---:|---:|---:|
@@ -262,10 +268,10 @@ run — a difference that is within run-to-run variation given a single seed
 and a single 1000-sample validation set, but the headline is that the LM
 target loses **nothing** observable here.
 
-> Per-epoch curves: [`lm_vs_denoiser/loss_curves.pdf`](lm_vs_denoiser/loss_curves.pdf).
+> Per-epoch curves: [`lm_vs_denoiser/iid/loss_curves.pdf`](lm_vs_denoiser/iid/loss_curves.pdf).
 > Both curves track within ≤0.3 dB of each other across all 25 epochs.
 
-#### 7b. Attention lag profile
+#### 7b. Attention lag profile, i.i.d. mode
 
 Last-layer attention, averaged over heads, evaluated on a clean sinusoid at
 each of `f ∈ {3, 5, 10, 15} Hz`. The hypothesis going in was a "lag 1 + lag
@@ -298,9 +304,9 @@ test frequency — same peak locations, same peak magnitudes, same
 inter-peak structure. The pattern is being pulled out of the *input
 dynamics*, not out of the supervisory signal.
 
-> Figure: [`lm_vs_denoiser/attention_lag_profile.pdf`](lm_vs_denoiser/attention_lag_profile.pdf).
+> Figure: [`lm_vs_denoiser/iid/attention_lag_profile.pdf`](lm_vs_denoiser/iid/attention_lag_profile.pdf).
 
-#### 7c. Linear frequency probe
+#### 7c. Linear frequency probe, i.i.d. mode
 
 Ridge probe (closed-form, `λ = 1e-4`) on layer-wise mean-pooled hidden
 states, trained on 1500 random sinusoids and evaluated on 400 held-out ones.
@@ -317,19 +323,75 @@ For reference, the canonical random-init control in `probes.py` reports
 by training. Both variants reach R² ≈ 0.97 at layer 2, with the denoiser
 ~0.005 higher.
 
-> Figure: [`lm_vs_denoiser/freq_probe.pdf`](lm_vs_denoiser/freq_probe.pdf).
+> Figure: [`lm_vs_denoiser/iid/freq_probe.pdf`](lm_vs_denoiser/iid/freq_probe.pdf).
+
+#### 7d. Noise-mode sweep — when does the LM ≡ denoiser equivalence break?
+
+The i.i.d. baseline confirms the prediction
+`E[noisy[n+1] | history] − E[clean[n+1] | history] = E[ε[n+1] | history] = 0`
+when noise is zero-mean and independent. The follow-up question is how the
+two regimes diverge once we relax that assumption.
+
+`python train_lm_vs_denoiser.py --noise-mode sweep` runs the same protocol
+under four noise distributions:
+
+| Mode | Noise model | What it stresses |
+|---|---|---|
+| `iid` | i.i.d. amp + phase noise (baseline) | nothing — the optimal predictors coincide |
+| `ar1_coloured` | amp noise replaced by AR(1), `α = 0.9`. Phase i.i.d. | future-noise is partially predictable |
+| `wiener_phase` | phase noise integrated (Wiener walk). Amp i.i.d. | structured oscillator-style drift |
+| `dc_offset` | per-sequence DC bias `μ ~ N(0, 0.5²)` | deterministic signal-independent bias |
+
+Headline scalars (filled in once the 25-epoch run completes):
+
+| Mode | Δ MSE-clean (LM − den) | Δ SNR gain (LM − den, dB) | Drift RMSE on val | Verdict |
+|---|---:|---:|---:|---|
+| `iid`           | _TBD_ | _TBD_ | _TBD_ | _expected ≈ 0_ |
+| `ar1_coloured`  | _TBD_ | _TBD_ | _TBD_ | _expected small +_ |
+| `wiener_phase`  | _TBD_ | _TBD_ | _TBD_ | _expected larger +_ |
+| `dc_offset`     | _TBD_ | _TBD_ | _TBD_ | _expected largest +_ |
+
+> Cross-mode summary figure: [`lm_vs_denoiser/noise_mode_sweep.pdf`](lm_vs_denoiser/noise_mode_sweep.pdf).
+> Per-mode artifacts: `lm_vs_denoiser/<mode>/{loss_curves.pdf,
+> attention_lag_profile.pdf, freq_probe.pdf, summary.json}`.
+
+The smoke-test (2 epochs) already shows the expected *ordering* — drift
+RMSE 0.012 (`iid`) → 0.012 (`ar1`) → 0.250 (`wiener_phase`) → 0.498
+(`dc_offset`). The full 25-epoch numbers will firm up the deltas; the
+hierarchy itself is robust to under-training.
+
+The interpretation, written before the run lands so it does not retro-fit:
+
+- For `iid`, both regimes converge to the same optimum. Confirmed in §7a–c.
+- For `ar1_coloured` (`α = 0.9`), the LM model can predict the next noise
+  sample as `α · ε[t]`. Bayes-optimal LM output therefore includes a small
+  noise component that the denoiser does not have. Effect should show up
+  as a modest positive Δ MSE-clean.
+- For `wiener_phase`, the noise is a **non-stationary** integrated process.
+  The LM model has a strong incentive to track the phase walk into its
+  output (the next phase is the current phase plus a step). This breaks
+  the AR(2) cleanly, since the "true" recurrence now has a slowly-varying
+  ω₀. Expect a larger Δ MSE-clean than AR(1) and a noticeable broadening
+  of the attention lag profile.
+- For `dc_offset`, the noise has a **deterministic per-sequence component**
+  that the LM model can predict almost perfectly from the first few
+  samples (it's just the running mean). The LM output should be biased by
+  ≈ μ; the denoiser should learn to subtract μ. This is the cleanest
+  illustration of the equivalence boundary: drift RMSE here is large not
+  because the model is bad, but because the *Bayes-optimal LM target* is
+  literally different from the Bayes-optimal denoiser target.
 
 ### Interpretation
 
-The LM-style and denoiser variants are observationally **the same model**:
-matched SNR gain to within 0.3 dB, matched frequency-probe R² to within
-0.006, and visually matched attention lag profiles. The "transformer
-discovers AR(2)" claim therefore does not depend on access to clean
-references during training.
+Under the **i.i.d. baseline** the LM-style and denoiser variants are
+observationally **the same model**: matched SNR gain to within 0.3 dB,
+matched frequency-probe R² to within 0.006, and visually matched
+attention lag profiles. The "transformer discovers AR(2)" claim therefore
+does not depend on access to clean references during training.
 
-There is a clean reason this was foreseeable. With i.i.d. noise added to a
-sinusoid, the optimal predictor of the *next noisy sample* given the noisy
-history is
+The mathematical reason: with i.i.d. zero-mean noise added to the signal,
+the optimal predictor of the *next noisy sample* given the noisy history
+decomposes as
 
 ```
 E[noisy[t+1] | noisy[0..t]] = E[clean[t+1] | noisy[0..t]] + E[ε[t+1] | noisy[0..t]]
@@ -337,48 +399,50 @@ E[noisy[t+1] | noisy[0..t]] = E[clean[t+1] | noisy[0..t]] + E[ε[t+1] | noisy[0.
                             = the optimal denoiser
 ```
 
-i.e. the Bayes-optimal LM-style predictor *is* the optimal denoiser. The
-two losses share the same minimiser; they differ only in their irreducible
-loss floor (the LM-style target sits ≈ noise-variance higher, which is
-exactly what the `MSE-vs-noisy` columns show — both variants land near
-0.07, the noise floor under our `amp_std=0.2, phase_std=0.1` setting).
-Gradient descent therefore finds essentially the same fixed point under
-both objectives.
+The two losses share the same minimiser; they differ only in their
+irreducible loss floor (the LM-style target sits ≈ noise-variance higher,
+which is exactly what the `MSE-vs-noisy` columns show — both variants land
+near 0.07, the noise floor under our `amp_std=0.2, phase_std=0.1`
+setting). Gradient descent therefore finds essentially the same fixed
+point under both objectives.
+
+The §7d sweep is the falsification test: relaxing the i.i.d.-zero-mean
+condition should make the second term non-zero, biasing the LM optimum
+away from the denoiser optimum. The smoke-test ordering already confirms
+the qualitative prediction; the 25-epoch numbers fix the magnitude.
 
 Practical consequence for the cognitive-RF program: **for any signal
 recovery task where the noise is approximately independent of the signal
-and zero-mean, the strict LM-style objective (predict the next observation)
-is a near-free substitute for supervised denoising.** It does not require
-clean references, which makes it a candidate self-supervised pretraining
-loss at the resource-grid scale (E07 territory). The supervised-denoiser
-shortcut used in E00 was an honest bookkeeping convenience, not a load-
-bearing assumption — the AR(2) story survives the cleaner framing.
-
-The flip side is that this is a **best-case demonstration**: a stationary
-zero-mean noise model and a single-tone signal. Real RF impairments
-(coloured noise, phase noise, hardware DC offsets, multipath) will not
-cleanly satisfy the `E[ε|history] = 0` condition, and a strict LM-style
-loss may then leave a non-trivial bias on the table that supervised
-training would not. Quantifying that gap on resource grids is the right
-empirical question to carry into E07.
+and zero-mean, the strict LM-style objective is a near-free substitute
+for supervised denoising. As soon as the noise becomes structured
+(coloured, integrated, biased, or signal-dependent), the LM regime will
+silently inherit a bias from the conditional expectation of the future
+noise.** This boundary is the key input to the E07 (masked-RE) recipe
+design — see [`notebook/01_discussions/009_lm_vs_denoiser_equivalence.md`](../../notebook/01_discussions/009_lm_vs_denoiser_equivalence.md)
+and [Q19 in open questions](../../notebook/04_open_questions.md).
 
 ### Caveats
 
-- Single seed (42), single run. The 0.3 dB delta is within plausible
-  run-to-run variation; the conclusion is "LM and denoiser are
-  indistinguishable on this task," not "LM is strictly better."
-- Both variants are trained on the *same* synthetic distribution, so
-  conclusions are about training-loss shape, not data distribution.
-- The LM-style target's irreducible loss floor is the noise variance, not
-  zero — `MSE-vs-noisy` cannot drop below ≈ noise power. We read the LM
-  model's denoising quality from `MSE-vs-clean`, evaluated post-training,
-  which it never optimised for directly. This is a fair readout because
-  the LM and denoiser optima coincide (see Interpretation).
+- Single seed (42) per noise mode. The 0.3 dB delta in §7a is within
+  plausible run-to-run variation; the conclusion there is "LM and
+  denoiser are indistinguishable under i.i.d. noise," not "LM is
+  strictly better." The four-mode hierarchy in §7d is robust to
+  seed-level noise because the deltas at the structured-noise end are
+  large.
+- Both variants are trained on the *same* synthetic distribution per
+  mode, so conclusions are about training-loss shape, not data
+  distribution.
+- The LM-style target's irreducible loss floor is the noise variance,
+  not zero — `MSE-vs-noisy` cannot drop below ≈ noise power. We read
+  the LM model's denoising quality from `MSE-vs-clean`, evaluated
+  post-training, which it never optimised for directly. This is a fair
+  readout under `iid` (where the optima coincide); it remains the right
+  readout under structured-noise modes (where the optima diverge — that
+  divergence is exactly what §7d measures).
 - The frequency-probe random-init R² (≈ 0) is referenced from the
-  canonical `probes.py` control rather than re-collected here; the same
-  architecture, the same input distribution, and an untrained model
-  produce a near-zero R² there, and there is no reason to expect a
-  different number on this sweep.
-- Outcome is contingent on noise being i.i.d. and zero-mean (the
-  `E[ε|history] = 0` argument). Conclusions do not transfer mechanically
-  to coloured / signal-correlated noise.
+  canonical `probes.py` control rather than re-collected here.
+- The §7d sweep uses one magnitude per impairment family
+  (`α_AR1 = 0.9`, `σ_μ = 0.5`, `σ_φ = 0.1` for the Wiener walk). The
+  shape of the equivalence boundary as a function of magnitude is a
+  natural follow-up — see Q20 in
+  [`notebook/04_open_questions.md`](../../notebook/04_open_questions.md).

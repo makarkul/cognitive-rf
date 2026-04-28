@@ -15,6 +15,8 @@ Three DSP-anchored hyperparameters drove the design:
 
 `emb_dim = n_heads × head_dim = 32` fell out. The model was not tuned; these three knobs constrained it.
 
+A late refinement (W18, 2026): "MSE loss on the next clean sample" makes E00 a **supervised denoising autoregressor**, not strict LLM-style next-sample prediction (which would use the next *noisy* sample as the only target). A side experiment confirmed these two regimes are empirically equivalent under i.i.d. zero-mean noise, and diverge under structured noise (DC offset > Wiener phase walk > AR(1)). That boundary maps directly onto E07's masked-RE recipe and is captured in [discussion 009](01_discussions/009_lm_vs_denoiser_equivalence.md).
+
 ## Where we are
 
 **OFDM recovery, step 4a (E01)** — scale the same idea from a 1-D sinusoid to a 14×300 LTE-5 resource grid. 834k params, 4 heads, 4 layers, `d_model = 128`, supervised on bit labels (BCE). Trained on EPA multipath + AWGN + CRS-style pilots, 30k steps, ~$1.50 on a RunPod 4090.

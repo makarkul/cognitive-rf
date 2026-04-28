@@ -62,11 +62,35 @@ class PairedSinusoidDataset(Dataset):
 
     Both targets are aligned to the same ``input_seq = noisy[0..N-1]`` so that
     the two regimes train on identical inputs and only differ in their loss.
+
+    Noise modes (selected by ``noise_mode``):
+
+    - ``iid``           – per-sample i.i.d. amplitude + phase noise (default).
+    - ``ar1_coloured``  – amplitude noise replaced by AR(1) coloured noise:
+                          ``e[n] = alpha*e[n-1] + sqrt(1-alpha^2)*w[n]``,
+                          ``w ~ N(0, amp_noise_std^2)``. Phase noise stays i.i.d.
+    - ``wiener_phase``  – phase noise integrated into a Wiener walk:
+                          ``theta[n] = theta[n-1] + nu[n]``,
+                          ``nu ~ N(0, phase_noise_std^2)``. Amplitude i.i.d.
+    - ``dc_offset``     – per-sequence DC bias ``mu ~ N(0, dc_offset_std)``
+                          added to the noisy stream (clean stays unbiased).
+                          Amplitude + phase noise stay i.i.d.
+
+    All modes use the same per-index RNG so denoiser and LM regimes see
+    byte-identical streams.
     """
+
+    NOISE_MODES = ("iid", "ar1_coloured", "wiener_phase", "dc_offset")
 
     def __init__(self, context_length, dataset_size, fs=100.0,
                  freq_range=(1.0, 20.0), amp_range=(0.5, 2.0),
-                 amp_noise_std=0.2, phase_noise_std=0.1, seed=0):
+                 amp_noise_std=0.2, phase_noise_std=0.1,
+                 noise_mode="iid", alpha_ar1=0.9, dc_offset_std=0.5,
+                 seed=0):
+        if noise_mode not in self.NOISE_MODES:
+            raise ValueError(
+                f"noise_mode must be one of {self.NOISE_MODES}, got {noise_mode!r}"
+            )
         self.context_length = context_length
         self.dataset_size = dataset_size
         self.fs = fs
@@ -74,11 +98,33 @@ class PairedSinusoidDataset(Dataset):
         self.amp_range = amp_range
         self.amp_noise_std = amp_noise_std
         self.phase_noise_std = phase_noise_std
+        self.noise_mode = noise_mode
+        self.alpha_ar1 = alpha_ar1
+        self.dc_offset_std = dc_offset_std
         # Per-index deterministic RNG so denoiser/LM see byte-identical streams.
         self.base_seed = seed
 
     def __len__(self):
         return self.dataset_size
+
+    def _gen_amp_noise(self, rng, n):
+        if self.noise_mode == "ar1_coloured":
+            w = rng.standard_normal(n) * self.amp_noise_std * math.sqrt(
+                1.0 - self.alpha_ar1 ** 2
+            )
+            e = np.empty(n, dtype=np.float64)
+            # Stationary initial sample.
+            e[0] = rng.standard_normal() * self.amp_noise_std
+            for k in range(1, n):
+                e[k] = self.alpha_ar1 * e[k - 1] + w[k]
+            return e
+        return rng.standard_normal(n) * self.amp_noise_std
+
+    def _gen_phase_noise(self, rng, n):
+        if self.noise_mode == "wiener_phase":
+            steps = rng.standard_normal(n) * self.phase_noise_std
+            return np.cumsum(steps)
+        return rng.standard_normal(n) * self.phase_noise_std
 
     def __getitem__(self, idx):
         rng = np.random.default_rng(self.base_seed * 1_000_003 + idx)
@@ -87,15 +133,18 @@ class PairedSinusoidDataset(Dataset):
         phase = float(rng.uniform(0.0, 2 * math.pi))
         n = self.context_length + 1
 
-        # Inline generator so we can use the per-index RNG (the helper in
-        # signal_dataset.py uses np.random global state).
         t = np.arange(n) / self.fs
-        amp_noise = rng.standard_normal(n) * self.amp_noise_std
-        phase_noise = rng.standard_normal(n) * self.phase_noise_std
+        amp_noise = self._gen_amp_noise(rng, n)
+        phase_noise = self._gen_phase_noise(rng, n)
         clean = amplitude * np.sin(2 * math.pi * freq * t + phase)
         noisy = (amplitude + amp_noise) * np.sin(
             2 * math.pi * freq * t + phase + phase_noise
         )
+
+        if self.noise_mode == "dc_offset":
+            mu = float(rng.standard_normal()) * self.dc_offset_std
+            noisy = noisy + mu
+
         clean = clean.astype(np.float32)
         noisy = noisy.astype(np.float32)
 
@@ -454,6 +503,172 @@ def plot_freq_probe(denoiser_probe, lm_probe, save_path):
 
 
 # ---------------------------------------------------------------------------
+# Per-mode driver
+# ---------------------------------------------------------------------------
+
+def run_mode(args, cfg, mode, out_root, device):
+    """Train (denoiser, LM) under one noise mode and write per-mode artifacts.
+
+    Returns a summary dict with the headline scalars for cross-mode plotting.
+    """
+    mode_dir = out_root / mode
+    mode_dir.mkdir(parents=True, exist_ok=True)
+    print(f"\n========================== mode = {mode} ==========================")
+    print(f"  writing artifacts under {mode_dir}")
+
+    ds_kwargs = dict(
+        amp_noise_std=args.amp_noise,
+        phase_noise_std=args.phase_noise,
+        noise_mode=mode,
+        alpha_ar1=args.alpha_ar1,
+        dc_offset_std=args.dc_offset_std,
+    )
+    train_ds = PairedSinusoidDataset(
+        cfg["context_length"], args.train_size, seed=args.seed, **ds_kwargs
+    )
+    val_ds = PairedSinusoidDataset(
+        cfg["context_length"], args.val_size, seed=args.seed + 17, **ds_kwargs
+    )
+    train_loader = DataLoader(train_ds, batch_size=args.batch_size,
+                              shuffle=True, drop_last=True)
+    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False)
+
+    torch.manual_seed(args.seed)
+    denoiser = TimeSeriesTransformer(cfg).to(device)
+    torch.manual_seed(args.seed)
+    lm_model = TimeSeriesTransformer(cfg).to(device)
+
+    print(f"\n--- [{mode}] Training DENOISER (target = clean[1..N]) ---")
+    denoiser_log = train_one(
+        denoiser, train_loader, val_loader, device,
+        args.epochs, args.lr, target_kind="clean",
+    )
+    torch.save(denoiser.state_dict(), mode_dir / "denoiser.pth")
+
+    print(f"\n--- [{mode}] Training LM-STYLE (target = noisy[1..N]) ---")
+    lm_log = train_one(
+        lm_model, train_loader, val_loader, device,
+        args.epochs, args.lr, target_kind="noisy",
+    )
+    torch.save(lm_model.state_dict(), mode_dir / "lm.pth")
+
+    plot_loss_curves(denoiser_log, lm_log, mode_dir / "loss_curves.pdf")
+
+    print(f"\n--- [{mode}] Attention lag profile ---")
+    test_freqs = [3.0, 5.0, 10.0, 15.0]
+    plot_attention_lag(denoiser, lm_model, test_freqs,
+                       fs=100.0, save_path=mode_dir / "attention_lag_profile.pdf")
+
+    print(f"\n--- [{mode}] Linear frequency probe ---")
+    den_probe = run_freq_probe(
+        denoiser, fs=100.0, ctx_len=cfg["context_length"],
+        amp_noise_std=args.amp_noise, phase_noise_std=args.phase_noise,
+        seed=args.seed,
+    )
+    lm_probe = run_freq_probe(
+        lm_model, fs=100.0, ctx_len=cfg["context_length"],
+        amp_noise_std=args.amp_noise, phase_noise_std=args.phase_noise,
+        seed=args.seed,
+    )
+    plot_freq_probe(den_probe, lm_probe, mode_dir / "freq_probe.pdf")
+
+    # Drift diagnostic — empirical mean(LM - denoiser) on the val set.
+    drift_rmse, drift_bias = _output_drift(denoiser, lm_model, val_loader, device)
+
+    summary = {
+        "mode": mode,
+        "config": cfg,
+        "ds_params": {k: v for k, v in ds_kwargs.items()},
+        "args": {k: v for k, v in vars(args).items() if k != "noise_mode"},
+        "denoiser_final": denoiser_log["final"],
+        "lm_final": lm_log["final"],
+        "delta_mse_clean": lm_log["final"]["mse_clean"] - denoiser_log["final"]["mse_clean"],
+        "delta_snr_gain_db": lm_log["final"]["snr_gain_db"] - denoiser_log["final"]["snr_gain_db"],
+        "drift_rmse": drift_rmse,
+        "drift_bias": drift_bias,
+        "denoiser_freq_probe": {
+            k: {"r2_test": v["r2_test"], "rmse_test": v["rmse_test"]}
+            for k, v in den_probe.items()
+        },
+        "lm_freq_probe": {
+            k: {"r2_test": v["r2_test"], "rmse_test": v["rmse_test"]}
+            for k, v in lm_probe.items()
+        },
+    }
+    with open(mode_dir / "summary.json", "w") as f:
+        json.dump(summary, f, indent=2)
+    print(f"\n--- [{mode}] Done. Wrote {mode_dir / 'summary.json'} ---")
+    return summary
+
+
+def _output_drift(denoiser, lm_model, val_loader, device):
+    """Compute RMS(LM_pred - denoiser_pred) and mean-bias on the val set."""
+    denoiser.eval()
+    lm_model.eval()
+    sse = 0.0
+    sbias = 0.0
+    n = 0
+    with torch.no_grad():
+        for x, _, _ in val_loader:
+            x = x.to(device)
+            d = denoiser(x)
+            l = lm_model(x)
+            diff = l - d
+            sse += torch.sum(diff ** 2).item()
+            sbias += torch.sum(diff).item()
+            n += diff.numel()
+    return math.sqrt(sse / max(n, 1)), sbias / max(n, 1)
+
+
+# ---------------------------------------------------------------------------
+# Cross-mode summary
+# ---------------------------------------------------------------------------
+
+def plot_sweep_summary(results, save_path):
+    """Bar plot of LM-vs-denoiser deltas across noise modes."""
+    modes = [r["mode"] for r in results]
+    deltas_mse = [r["delta_mse_clean"] for r in results]
+    deltas_snr = [r["delta_snr_gain_db"] for r in results]
+    drifts = [r["drift_rmse"] for r in results]
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.2))
+
+    ax = axes[0]
+    colors = ["#2a9d8f" if d <= 0.005 else "#e76f51" for d in deltas_mse]
+    ax.bar(modes, deltas_mse, color=colors, alpha=0.85)
+    ax.axhline(y=0, color="gray", linestyle="--", alpha=0.6)
+    ax.set_ylabel("Δ MSE-vs-clean  (LM − denoiser)")
+    ax.set_title("Denoising-quality penalty under LM-style training\n"
+                 "(>0 = LM worse than denoiser)")
+    ax.grid(axis="y", alpha=0.3)
+    ax.tick_params(axis="x", rotation=20)
+
+    ax = axes[1]
+    colors = ["#2a9d8f" if d >= -0.1 else "#e76f51" for d in deltas_snr]
+    ax.bar(modes, deltas_snr, color=colors, alpha=0.85)
+    ax.axhline(y=0, color="gray", linestyle="--", alpha=0.6)
+    ax.set_ylabel("Δ SNR gain (dB)  (LM − denoiser)")
+    ax.set_title("SNR-gain penalty under LM-style training\n"
+                 "(<0 = LM loses SNR)")
+    ax.grid(axis="y", alpha=0.3)
+    ax.tick_params(axis="x", rotation=20)
+
+    ax = axes[2]
+    ax.bar(modes, drifts, color="#264653", alpha=0.85)
+    ax.set_ylabel("RMS(LM_pred − denoiser_pred)  on val set")
+    ax.set_title("Output-divergence between regimes\n"
+                 "(0 = identical, >0 = LM diverges)")
+    ax.grid(axis="y", alpha=0.3)
+    ax.tick_params(axis="x", rotation=20)
+
+    fig.suptitle("LM-style vs denoiser across noise modes", fontsize=13)
+    fig.tight_layout()
+    fig.savefig(save_path)
+    plt.close(fig)
+    print(f"Saved {save_path}")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -467,99 +682,57 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--amp-noise", type=float, default=0.2)
     parser.add_argument("--phase-noise", type=float, default=0.1)
+    parser.add_argument(
+        "--noise-mode",
+        choices=list(PairedSinusoidDataset.NOISE_MODES) + ["sweep"],
+        default="iid",
+        help="Single mode, or 'sweep' to run all four sequentially.",
+    )
+    parser.add_argument("--alpha-ar1", type=float, default=0.9,
+                        help="AR(1) coefficient for ar1_coloured noise.")
+    parser.add_argument("--dc-offset-std", type=float, default=0.5,
+                        help="Std-dev of per-sequence DC offset (dc_offset mode).")
     parser.add_argument("--out-dir", type=str, default="lm_vs_denoiser")
     parser.add_argument("--device", type=str,
                         default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
 
     here = Path(__file__).resolve().parent
-    out_dir = (here / args.out_dir).resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_root = (here / args.out_dir).resolve()
+    out_root.mkdir(parents=True, exist_ok=True)
 
     device = torch.device(args.device)
     print(f"Using device: {device}")
-    print(f"Writing results to {out_dir}")
+    print(f"Writing results under {out_root}")
 
     cfg = TS_TRANSFORMER_CONFIG.copy()
     print(f"Model config: {cfg}")
+    print(f"Model parameters: "
+          f"{count_parameters(TimeSeriesTransformer(cfg)):,}")
 
-    # Same data stream for both runs (PairedDataset is deterministic per index).
-    train_ds = PairedSinusoidDataset(
-        cfg["context_length"], args.train_size, seed=args.seed,
-        amp_noise_std=args.amp_noise, phase_noise_std=args.phase_noise,
-    )
-    val_ds = PairedSinusoidDataset(
-        cfg["context_length"], args.val_size, seed=args.seed + 17,
-        amp_noise_std=args.amp_noise, phase_noise_std=args.phase_noise,
-    )
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size,
-                              shuffle=True, drop_last=True)
-    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False)
+    if args.noise_mode == "sweep":
+        modes = list(PairedSinusoidDataset.NOISE_MODES)
+    else:
+        modes = [args.noise_mode]
 
-    # Same init for both models.
-    torch.manual_seed(args.seed)
-    denoiser = TimeSeriesTransformer(cfg).to(device)
-    torch.manual_seed(args.seed)
-    lm_model = TimeSeriesTransformer(cfg).to(device)
-    print(f"Model parameters: {count_parameters(denoiser):,}")
+    results = []
+    for mode in modes:
+        results.append(run_mode(args, cfg, mode, out_root, device))
 
-    print("\n--- Training DENOISER (target = clean[1..N]) ---")
-    denoiser_log = train_one(
-        denoiser, train_loader, val_loader, device,
-        args.epochs, args.lr, target_kind="clean",
-    )
-    torch.save(denoiser.state_dict(), out_dir / "denoiser.pth")
+    if len(modes) > 1:
+        plot_sweep_summary(results, out_root / "noise_mode_sweep.pdf")
+        with open(out_root / "sweep_summary.json", "w") as f:
+            json.dump(results, f, indent=2)
+        print(f"\nWrote {out_root / 'sweep_summary.json'}")
 
-    print("\n--- Training LM-STYLE (target = noisy[1..N]) ---")
-    lm_log = train_one(
-        lm_model, train_loader, val_loader, device,
-        args.epochs, args.lr, target_kind="noisy",
-    )
-    torch.save(lm_model.state_dict(), out_dir / "lm.pth")
-
-    plot_loss_curves(denoiser_log, lm_log, out_dir / "loss_curves.pdf")
-
-    print("\n--- Attention lag profile ---")
-    test_freqs = [3.0, 5.0, 10.0, 15.0]
-    plot_attention_lag(denoiser, lm_model, test_freqs,
-                       fs=100.0, save_path=out_dir / "attention_lag_profile.pdf")
-
-    print("\n--- Linear frequency probe ---")
-    den_probe = run_freq_probe(
-        denoiser, fs=100.0, ctx_len=cfg["context_length"],
-        amp_noise_std=args.amp_noise, phase_noise_std=args.phase_noise,
-        seed=args.seed,
-    )
-    lm_probe = run_freq_probe(
-        lm_model, fs=100.0, ctx_len=cfg["context_length"],
-        amp_noise_std=args.amp_noise, phase_noise_std=args.phase_noise,
-        seed=args.seed,
-    )
-    print("denoiser frequency probe:")
-    for name, r in den_probe.items():
-        print(f"  {name}: R²={r['r2_test']:.3f}  RMSE={r['rmse_test']:.2f} Hz")
-    print("LM frequency probe:")
-    for name, r in lm_probe.items():
-        print(f"  {name}: R²={r['r2_test']:.3f}  RMSE={r['rmse_test']:.2f} Hz")
-    plot_freq_probe(den_probe, lm_probe, out_dir / "freq_probe.pdf")
-
-    summary = {
-        "config": cfg,
-        "args": vars(args),
-        "denoiser_final": denoiser_log["final"],
-        "lm_final": lm_log["final"],
-        "denoiser_freq_probe": {
-            k: {"r2_test": v["r2_test"], "rmse_test": v["rmse_test"]}
-            for k, v in den_probe.items()
-        },
-        "lm_freq_probe": {
-            k: {"r2_test": v["r2_test"], "rmse_test": v["rmse_test"]}
-            for k, v in lm_probe.items()
-        },
-    }
-    with open(out_dir / "summary.json", "w") as f:
-        json.dump(summary, f, indent=2)
-    print(f"\nWrote {out_dir / 'summary.json'}")
+        print("\n--- Sweep summary ---")
+        print(f"{'mode':<16}{'Δ MSE-clean':>14}{'Δ SNR-gain dB':>16}"
+              f"{'drift RMSE':>14}")
+        for r in results:
+            print(
+                f"{r['mode']:<16}{r['delta_mse_clean']:+14.5f}"
+                f"{r['delta_snr_gain_db']:+16.3f}{r['drift_rmse']:14.4f}"
+            )
     print("\nDone.")
 
 

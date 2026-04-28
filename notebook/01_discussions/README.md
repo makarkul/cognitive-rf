@@ -12,6 +12,7 @@ Curated conversations that produced design decisions or insight but don't fit in
 - [006 — Generative simulator and the cognitive radio arc](006_generative_simulator_and_cognitive_radio.md) — what "generative simulator" means in our usage, and how the year plan connects to the cognitive-radio target.
 - [007 — Notebook structure and process rules](007_notebook_structure.md) — why the notebook is the repo and how experiments get filed.
 - [008 — "RFFormer" is not a paper](008_rfformer_is_not_a_paper.md) — clarifies a piece of imprecise shorthand; the real referent is DARPA RFMLS + the adjacent paper cluster in `05_paper_notes/`.
+- [009 — Denoising autoregressor vs LM-style next-sample prediction](009_lm_vs_denoiser_equivalence.md) — when the canonical E00 setup (clean target) is equivalent to true LM-style training (noisy target), and where this matters for E07/E12.
 
 ## Writing discussion files
 

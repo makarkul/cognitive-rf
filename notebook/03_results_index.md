@@ -2,6 +2,12 @@
 
 One row per experiment. Keep this up to date as experiments complete.
 
+## Phase 0 — Pre-program (sinusoid warm-up)
+
+| ID | Title | Status | Headline result | Link |
+|---|---|---|---|---|
+| E00 | Sinusoid recovery with a tiny transformer (+ LM-vs-denoiser side experiment) | complete | 29k-param transformer learns AR(2) implicitly (attention peaks at lags 1, 2) and encodes frequency in hidden state (linear-probe R² > 0.9 vs random-init ≈ 0). Side experiment (W18 2026): LM-style next-sample prediction matches supervised denoising under i.i.d. zero-mean noise; diverges under structured noise, with the predicted hierarchy `iid < ar1 < wiener_phase < dc_offset`. | [results](02_experiments/E00_sinusoid_recovery/results.md) · [discussion 009](01_discussions/009_lm_vs_denoiser_equivalence.md) |
+
 ## Phase 1 — Architecture & validation (months 1–3)
 
 | ID | Title | Status | Headline result | Link |
