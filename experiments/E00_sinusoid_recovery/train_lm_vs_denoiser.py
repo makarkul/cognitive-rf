@@ -86,7 +86,7 @@ class PairedSinusoidDataset(Dataset):
                  freq_range=(1.0, 20.0), amp_range=(0.5, 2.0),
                  amp_noise_std=0.2, phase_noise_std=0.1,
                  noise_mode="iid", alpha_ar1=0.9, dc_offset_std=0.5,
-                 seed=0):
+                 input_demean=False, seed=0):
         if noise_mode not in self.NOISE_MODES:
             raise ValueError(
                 f"noise_mode must be one of {self.NOISE_MODES}, got {noise_mode!r}"
@@ -101,6 +101,7 @@ class PairedSinusoidDataset(Dataset):
         self.noise_mode = noise_mode
         self.alpha_ar1 = alpha_ar1
         self.dc_offset_std = dc_offset_std
+        self.input_demean = input_demean
         # Per-index deterministic RNG so denoiser/LM see byte-identical streams.
         self.base_seed = seed
 
@@ -147,6 +148,14 @@ class PairedSinusoidDataset(Dataset):
 
         clean = clean.astype(np.float32)
         noisy = noisy.astype(np.float32)
+
+        # Option-1 preprocessing: subtract per-sequence mean from the noisy
+        # stream and from the LM target. The clean target is offset-free by
+        # construction (the dc_offset mode adds μ only to the noisy stream),
+        # so it stays untouched. This mirrors a real receiver's AGC stage.
+        if self.input_demean:
+            mean_in = float(np.mean(noisy[: self.context_length]))
+            noisy = noisy - mean_in
 
         input_seq = torch.tensor(noisy[: self.context_length])
         clean_tgt = torch.tensor(clean[1: self.context_length + 1])
@@ -522,6 +531,7 @@ def run_mode(args, cfg, mode, out_root, device):
         noise_mode=mode,
         alpha_ar1=args.alpha_ar1,
         dc_offset_std=args.dc_offset_std,
+        input_demean=args.input_demean,
     )
     train_ds = PairedSinusoidDataset(
         cfg["context_length"], args.train_size, seed=args.seed, **ds_kwargs
@@ -692,6 +702,14 @@ def main():
                         help="AR(1) coefficient for ar1_coloured noise.")
     parser.add_argument("--dc-offset-std", type=float, default=0.5,
                         help="Std-dev of per-sequence DC offset (dc_offset mode).")
+    parser.add_argument("--input-demean", action="store_true",
+                        help="Option-1 preprocessing: subtract per-sequence mean "
+                             "from the noisy input + LM target (clean target "
+                             "untouched). Mirrors a real receiver's AGC stage.")
+    parser.add_argument("--scaled-arch", action="store_true",
+                        help="Use a scaled architecture (emb_dim=128, n_heads=4, "
+                             "n_layers=4, ~200k params, ~7x default) to test "
+                             "whether the LM-style penalty is a capacity issue.")
     parser.add_argument("--out-dir", type=str, default="lm_vs_denoiser")
     parser.add_argument("--device", type=str,
                         default="cuda" if torch.cuda.is_available() else "cpu")
@@ -706,6 +724,8 @@ def main():
     print(f"Writing results under {out_root}")
 
     cfg = TS_TRANSFORMER_CONFIG.copy()
+    if args.scaled_arch:
+        cfg.update({"emb_dim": 128, "n_heads": 4, "n_layers": 4})
     print(f"Model config: {cfg}")
     print(f"Model parameters: "
           f"{count_parameters(TimeSeriesTransformer(cfg)):,}")
