@@ -71,6 +71,36 @@ deterministic component the LM model can predict, the LM's
 Bayes-optimal output is biased by exactly that component, and there
 is no way for further training to fix it without changing the loss.
 
+### Capacity-vs-loss falsification (E00 §7e)
+
+A natural follow-up question — "is the dc_offset penalty just a
+capacity issue?" — was tested with two further runs of the same
+script:
+
+| Config | LM MSE-clean | LM SNR gain | Δ SNR-gain |
+|---|---:|---:|---:|
+| 29k params, raw input *(baseline)* | 0.302 | +3.77 dB | **−6.91 dB** |
+| 29k params, demeaned input *(option 1)* | 0.041 | +10.58 dB | **+0.24 dB** |
+| 810k params (27×), raw input *(capacity test)* | 0.278 | +4.13 dB | **−9.70 dB** |
+
+Two clean conclusions:
+
+1. **Option 1 (per-sequence demeaning of the noisy input + LM target)
+   closes the gap entirely** — drift RMSE collapses 5× and Δ SNR-gain
+   becomes seed-noise.
+2. **27× capacity does not close the gap** — the denoiser improves
+   (+10.68 → +13.83 dB) but the LM regime barely moves
+   (+3.77 → +4.13 dB), so the absolute LM penalty actually grows. The
+   810k LM lands at MSE-clean = 0.278, exactly matching the theoretical
+   infinite-capacity floor `denoiser_MSE + Var(μ) = 0.030 + 0.25 = 0.28`.
+
+**Implication for the cognitive-RF program:** scaling the transformer
+will not paper over structured-noise penalties from a strict LM-style
+loss. The fix has to live in the input pipeline (option 1, the AGC
+analogue), in the loss (option 2, with task-drift caveats), or in an
+explicit impairment estimator (option 3). "More layers / heads" is
+not a substitute for any of them.
+
 ## Why this matters for the cognitive-RF program
 
 The arc points toward E07 (masked-RE self-supervised pretraining) and E12

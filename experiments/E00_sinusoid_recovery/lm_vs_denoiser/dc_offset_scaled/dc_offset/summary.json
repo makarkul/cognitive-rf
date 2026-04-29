@@ -1,0 +1,89 @@
+{
+  "mode": "dc_offset",
+  "config": {
+    "context_length": 128,
+    "emb_dim": 128,
+    "n_heads": 4,
+    "n_layers": 4,
+    "drop_rate": 0.05,
+    "qkv_bias": false
+  },
+  "ds_params": {
+    "amp_noise_std": 0.2,
+    "phase_noise_std": 0.1,
+    "noise_mode": "dc_offset",
+    "alpha_ar1": 0.9,
+    "dc_offset_std": 0.5,
+    "input_demean": false
+  },
+  "args": {
+    "epochs": 25,
+    "batch_size": 32,
+    "lr": 0.001,
+    "train_size": 5000,
+    "val_size": 1000,
+    "seed": 42,
+    "amp_noise": 0.2,
+    "phase_noise": 0.1,
+    "alpha_ar1": 0.9,
+    "dc_offset_std": 0.5,
+    "input_demean": false,
+    "scaled_arch": true,
+    "out_dir": "lm_vs_denoiser/dc_offset_scaled",
+    "device": "cpu"
+  },
+  "denoiser_final": {
+    "mse_clean": 0.02976376312971115,
+    "mse_noisy": 0.30151192367076873,
+    "snr_in_db": 0.9431042079462226,
+    "snr_out_db": 14.775765325952388,
+    "snr_gain_db": 13.832661118006166
+  },
+  "lm_final": {
+    "mse_clean": 0.2777542128562927,
+    "mse_noisy": 0.05240986624360085,
+    "snr_in_db": 0.9431042079462226,
+    "snr_out_db": 5.07603717354741,
+    "snr_gain_db": 4.132932965601187
+  },
+  "delta_mse_clean": 0.24799044972658155,
+  "delta_snr_gain_db": -9.69972815240498,
+  "drift_rmse": 0.5151073667724483,
+  "drift_bias": -0.01584457827731967,
+  "denoiser_freq_probe": {
+    "layer_1": {
+      "r2_test": 0.9060375529890595,
+      "rmse_test": 1.6694412231445312
+    },
+    "layer_2": {
+      "r2_test": 0.9390744032984543,
+      "rmse_test": 1.3442927598953247
+    },
+    "layer_3": {
+      "r2_test": 0.9744399860369476,
+      "rmse_test": 0.8707119822502136
+    },
+    "layer_4": {
+      "r2_test": 0.977040799003655,
+      "rmse_test": 0.8252249360084534
+    }
+  },
+  "lm_freq_probe": {
+    "layer_1": {
+      "r2_test": 0.9167200977989838,
+      "rmse_test": 1.5716798305511475
+    },
+    "layer_2": {
+      "r2_test": 0.9516044042302023,
+      "rmse_test": 1.198110580444336
+    },
+    "layer_3": {
+      "r2_test": 0.9733821905727831,
+      "rmse_test": 0.8885464668273926
+    },
+    "layer_4": {
+      "r2_test": 0.9762147547954986,
+      "rmse_test": 0.8399391174316406
+    }
+  }
+}

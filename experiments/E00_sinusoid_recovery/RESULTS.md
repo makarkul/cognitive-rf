@@ -400,6 +400,78 @@ What each mode says:
 **Hierarchy summary by Δ SNR-gain magnitude:**
 `iid (+0.26) ≈ ar1 (−0.12) << wiener_phase (−0.70) <<< dc_offset (−6.91)`.
 
+#### 7e. Capacity-vs-loss test on dc_offset
+
+`dc_offset` showed the largest LM penalty (Δ SNR-gain −6.91 dB). The
+follow-up question is whether that gap is a **capacity** issue (the
+small 29k-param model cannot represent the offset-removal map) or a
+**loss-function** issue (the LM target literally contains the offset
+the denoiser doesn't have to predict).
+
+We isolate the two possibilities with two extra runs:
+
+- **Option 1 — input-side fix.** Same 29k-param model, same dc_offset
+  noise, but with per-sequence demeaning of the noisy input + LM
+  target (clean target untouched). Mirrors a real receiver's AGC
+  stage. Configuration: `--noise-mode dc_offset --input-demean`.
+- **Capacity test — bigger model, same loss.** Scaled architecture
+  (`emb_dim=128, n_heads=4, n_layers=4`, 810k params, 27× default),
+  raw input. Configuration: `--noise-mode dc_offset --scaled-arch`.
+
+Outcome:
+
+| Config | denoiser MSE-clean | LM MSE-clean | denoiser SNR gain | LM SNR gain | Δ SNR (LM − den, dB) | drift RMSE |
+|---|---:|---:|---:|---:|---:|---:|
+| default arch (29k), raw input *(baseline)* | 0.062 | 0.302 | **+10.68** | **+3.77** | **−6.91** | 0.483 |
+| default arch (29k), demeaned input *(option 1)* | 0.043 | 0.041 | **+10.34** | **+10.58** | **+0.24** | 0.090 |
+| scaled arch (810k), raw input *(capacity test)* | 0.030 | 0.278 | **+13.83** | **+4.13** | **−9.70** | 0.515 |
+
+> Per-config artifacts:
+> [`lm_vs_denoiser/dc_offset_demean/dc_offset/`](lm_vs_denoiser/dc_offset_demean/dc_offset/),
+> [`lm_vs_denoiser/dc_offset_scaled/dc_offset/`](lm_vs_denoiser/dc_offset_scaled/dc_offset/).
+
+What the three rows say together:
+
+1. **Option 1 closes the gap entirely.** Δ SNR-gain dropped from
+   −6.91 dB (raw) to +0.24 dB (demeaned) — within seed-noise of the
+   `iid` baseline. Drift RMSE collapsed by 5×, from 0.483 to 0.090
+   (essentially the same as the raw `iid` mode). The 29k-param model
+   was never the bottleneck; preprocessing the offset out of the input
+   stream restored full LM-vs-denoiser equivalence.
+2. **Capacity does not close the gap.** Going from 29k to 810k
+   parameters made the *denoiser* better (+10.68 → +13.83 dB; capacity
+   genuinely helps when the loss permits), but the LM regime barely
+   moved (+3.77 → +4.13 dB). Δ SNR-gain therefore *grew* in absolute
+   magnitude from −6.91 dB to −9.70 dB. The LM is loss-floored.
+3. **The numerical floor matches theory exactly.** The Bayes-optimal
+   LM output under dc_offset is `denoiser_optimal + μ`, so
+
+   ```
+   MSE_LM(scaled, raw) ≈ MSE_denoiser(scaled, raw) + Var(μ)
+                       = 0.0298                    + 0.25
+                       = 0.2798
+   ```
+
+   Observed: 0.2778. The 810k-param LM is sitting at the
+   infinite-capacity theoretical floor; further scaling would not
+   help.
+
+**Conclusion.** The dc_offset LM penalty is a property of the
+*objective function*, not of model capacity. Fixing it requires
+either changing the loss (option 2 — running-mean subtraction on the
+target, with the task-drift caveat from the earlier analysis) or
+preprocessing the offset out of the input pipeline (option 1, the
+recommended default). Pouring more parameters at the original
+formulation cannot help, and indeed makes the absolute Δ SNR-gain
+gap larger because only the denoiser side benefits from the extra
+capacity.
+
+This rules out a "we just need a bigger transformer" answer to the
+structured-noise penalty in the cognitive-RF program — option 1 (or
+its program-level analogue, hardware AGC + receiver normalization)
+is on the critical path for any pretraining recipe that includes
+DC-offset-like impairments.
+
 ### Interpretation
 
 Under the **i.i.d. baseline** the LM-style and denoiser variants are
